@@ -13,12 +13,12 @@ exit /b 1
 
 :mingw
 echo Building with MinGW g++ ...
-g++ -std=c++17 -O2 main.cpp -o LiteCity.exe -mwindows -static -lopengl32 -lglu32 -lgdi32 -luser32
+g++ -std=c++17 -O2 main.cpp -o LiteCity.exe -mwindows -static -lopengl32 -lglu32 -lgdi32 -luser32 -lwinmm -lws2_32
 goto done
 
 :msvc
 echo Building with MSVC ...
-cl /nologo /O2 /EHsc /std:c++17 main.cpp /Fe:LiteCity.exe /link opengl32.lib glu32.lib gdi32.lib user32.lib /SUBSYSTEM:WINDOWS
+cl /nologo /O2 /EHsc /std:c++17 main.cpp /Fe:LiteCity.exe /link opengl32.lib glu32.lib gdi32.lib user32.lib winmm.lib ws2_32.lib /SUBSYSTEM:WINDOWS
 goto done
 
 :done

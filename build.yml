@@ -1,0 +1,22 @@
+name: Build LiteCity
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Compile LiteCity.exe
+        shell: bash
+        run: g++ -std=c++17 -O2 main.cpp -o LiteCity.exe -mwindows -static -lopengl32 -lglu32 -lgdi32 -luser32 -lwinmm -lws2_32
+
+      - name: Save the exe so you can download it
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteCity-exe
+          path: LiteCity.exe

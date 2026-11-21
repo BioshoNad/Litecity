@@ -40,13 +40,20 @@ struct Platform {
     bool running = true;
     bool down[256] = {};
     bool pressed[256] = {};
-    GLuint fontSmall = 0, fontBig = 0;
+    GLuint fontSmall = 0, fontMid = 0, fontBig = 0;
+    int mx = 0, my = 0;
+    bool mouseDown = false, mousePressed = false;
+    std::string typed;  // characters typed this frame
     LARGE_INTEGER freq, last;
 };
 inline Platform& plat() { static Platform p; return p; }
 
 inline bool key(int vk) { return plat().down[vk & 255]; }
 inline bool tapped(int vk) { return plat().pressed[vk & 255]; }
+inline float mouseX() { return (float)plat().mx; }
+inline float mouseY() { return (float)plat().my; }
+inline bool mouseClicked() { return plat().mousePressed; }
+inline bool mouseHeld() { return plat().mouseDown; }
 
 inline LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     Platform& p = plat();
@@ -58,6 +65,12 @@ inline LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_KEYUP:
         if (wp < 256) p.down[wp] = false;
+        return 0;
+    case WM_MOUSEMOVE: p.mx = (short)LOWORD(lp); p.my = (short)HIWORD(lp); return 0;
+    case WM_LBUTTONDOWN: p.mouseDown = true; p.mousePressed = true; p.mx = (short)LOWORD(lp); p.my = (short)HIWORD(lp); return 0;
+    case WM_LBUTTONUP: p.mouseDown = false; return 0;
+    case WM_CHAR:
+        if (wp >= 32 && wp < 127) p.typed.push_back((char)wp);
         return 0;
     case WM_KILLFOCUS: memset(p.down, 0, sizeof(p.down)); return 0;
     case WM_SIZE: p.w = LOWORD(lp); p.h = HIWORD(lp); return 0;
@@ -102,6 +115,7 @@ inline bool init(const char* title, int w, int h) {
     pfd.iPixelType = PFD_TYPE_RGBA;
     pfd.cColorBits = 32;
     pfd.cDepthBits = 24;
+    pfd.cStencilBits = 8;
     pfd.iLayerType = PFD_MAIN_PLANE;
     int pf = ChoosePixelFormat(p.hdc, &pfd);
     if (!pf || !SetPixelFormat(p.hdc, pf, &pfd)) return false;
@@ -111,6 +125,7 @@ inline bool init(const char* title, int w, int h) {
     SwapFn sw = (SwapFn)(void*)wglGetProcAddress("wglSwapIntervalEXT");
     if (sw) sw(1);  // vsync
     p.fontSmall = makeFont(p.hdc, 15);
+    p.fontMid = makeFont(p.hdc, 26);
     p.fontBig = makeFont(p.hdc, 54);
     QueryPerformanceFrequency(&p.freq);
     QueryPerformanceCounter(&p.last);
@@ -121,6 +136,8 @@ inline bool init(const char* title, int w, int h) {
 inline bool pump(float& dt) {
     Platform& p = plat();
     memset(p.pressed, 0, sizeof(p.pressed));
+    p.mousePressed = false;
+    p.typed.clear();
     MSG m;
     while (PeekMessageA(&m, nullptr, 0, 0, PM_REMOVE)) {
         if (m.message == WM_QUIT) p.running = false;
@@ -184,7 +201,43 @@ inline void textBig(float x, float y, const std::string& s, float r = 1, float g
     glListBase(plat().fontBig - 32);
     glCallLists((GLsizei)s.size(), GL_UNSIGNED_BYTE, s.c_str());
 }
+inline void textMid(float x, float y, const std::string& s, float r = 1, float g = 1, float b = 1) {
+    glColor3f(r, g, b);
+    glRasterPos2f(x, y);
+    glListBase(plat().fontMid - 32);
+    glCallLists((GLsizei)s.size(), GL_UNSIGNED_BYTE, s.c_str());
+}
 inline float textWidthBig(const std::string& s) { return (float)s.size() * 29.f; }
+inline float textWidthMid(const std::string& s) { return (float)s.size() * 14.f; }
+inline float textWidth(const std::string& s) { return (float)s.size() * 8.f; }
+
+// filled rounded rectangle (2D pass)
+inline void roundRect(float x, float y, float w, float h, float rad, float r, float g, float b, float a = 1.f) {
+    rad = rad > w * 0.5f ? w * 0.5f : (rad > h * 0.5f ? h * 0.5f : rad);
+    glColor4f(r, g, b, a);
+    glBegin(GL_QUADS);
+    glVertex2f(x + rad, y); glVertex2f(x + w - rad, y); glVertex2f(x + w - rad, y + h); glVertex2f(x + rad, y + h);
+    glVertex2f(x, y + rad); glVertex2f(x + rad, y + rad); glVertex2f(x + rad, y + h - rad); glVertex2f(x, y + h - rad);
+    glVertex2f(x + w - rad, y + rad); glVertex2f(x + w, y + rad); glVertex2f(x + w, y + h - rad); glVertex2f(x + w - rad, y + h - rad);
+    glEnd();
+    const float cx[4] = {x + rad, x + w - rad, x + w - rad, x + rad};
+    const float cy[4] = {y + rad, y + rad, y + h - rad, y + h - rad};
+    for (int c = 0; c < 4; c++) {
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2f(cx[c], cy[c]);
+        for (int i = 0; i <= 8; i++) {
+            float a2 = (c * 90.f + i * 90.f / 8.f + 180.f) * PI / 180.f;
+            glVertex2f(cx[c] + cosf(a2) * rad, cy[c] + sinf(a2) * rad);
+        }
+        glEnd();
+    }
+}
+inline bool inRect(float px, float py, float x, float y, float w, float h) { return px >= x && px <= x + w && py >= y && py <= y + h; }
+inline void scissor(float x, float y, float w, float h) {  // top-left origin
+    glEnable(GL_SCISSOR_TEST);
+    glScissor((GLint)x, (GLint)((float)plat().h - y - h), (GLsizei)w, (GLsizei)h);
+}
+inline void noScissor() { glDisable(GL_SCISSOR_TEST); }
 
 // unit cube centred on the origin (-0.5..0.5), with normals
 inline void cube() {
