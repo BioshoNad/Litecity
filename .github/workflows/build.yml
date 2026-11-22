@@ -13,7 +13,7 @@ jobs:
 
       - name: Compile LiteCity.exe
         shell: bash
-        run: g++ -std=c++17 -O2 main.cpp -o LiteCity.exe -mwindows -static -lopengl32 -lglu32 -lgdi32 -luser32
+        run: g++ -std=c++17 -O2 main.cpp -o LiteCity.exe -mwindows -static -lopengl32 -lgdi32 -luser32 -lwinmm -lws2_32
 
       - name: Save the exe so you can download it
         uses: actions/upload-artifact@v4
