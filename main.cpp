@@ -1,11 +1,13 @@
 // ============================================================================
-//  LITE CITY  v0.2 (beta)  -  sample open-world game running on LiteEngine
-//  Story mode with John & Jason, phone, map, radio, multiplayer, shadows & sky.
+//  SAMPLE  v0.3  -  open-world game running on LiteEngine
+//  Story mode with John & Jason, phone, map, radio, multiplayer.
+//  Graphics: shader lighting, sun shadow maps, sky reflections, MSAA, bloom.
 // ============================================================================
 #include "engine.h"
 #include "audio.h"
 #include "net.h"
 #include "gfx.h"
+#include "renderer.h"
 #include <algorithm>
 #include <cstdio>
 #include <string>
@@ -68,6 +70,7 @@ static Ped peds[MAXPEDS];
 static std::vector<Particle> parts;
 static std::vector<Toast> toasts;
 static std::vector<float> lamps;  // x, z, faceX, faceZ per lamp
+static GLuint texWhite = 0;
 static GLuint cityList = 0, texAsph = 0, texWalk = 0, texGrass = 0, texB[3] = {0, 0, 0};
 
 static Person chars[2];
@@ -117,7 +120,8 @@ static void addSpecial(int bi, int bj, int type, float r, float gg, float b, con
 static void drawTier(const Building& b, float hx, float hz, float y0, float h, float cr, float cg, float cb) {
     float x0 = b.x - hx, x1 = b.x + hx, z0 = b.z - hz, z1 = b.z + hz, y1 = y0 + h;
     float u = (hx * 2) / 16.f, w = (hz * 2) / 16.f, v0 = y0 / 20.f, v1 = y1 / 20.f;
-    glColor3f(cr, cg, cb);
+    float refl = b.style == 0 ? 0.72f : (b.style == 2 ? 0.82f : 1.0f);  // glass towers are shiny, brick is matte
+    glColor4f(cr, cg, cb, refl);
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, texB[b.style]);
     glBegin(GL_QUADS);
@@ -127,6 +131,7 @@ static void drawTier(const Building& b, float hx, float hz, float y0, float h, f
     glNormal3f(-1, 0, 0); glTexCoord2f(0, v0); glVertex3f(x0, y0, z0); glTexCoord2f(w, v0); glVertex3f(x0, y0, z1); glTexCoord2f(w, v1); glVertex3f(x0, y1, z1); glTexCoord2f(0, v1); glVertex3f(x0, y1, z0);
     glEnd();
     glDisable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texWhite);
     glColor3f(cr * 0.5f, cg * 0.5f, cb * 0.5f);
     glBegin(GL_QUADS);
     glNormal3f(0, 1, 0); glVertex3f(x0, y1, z1); glVertex3f(x1, y1, z1); glVertex3f(x1, y1, z0); glVertex3f(x0, y1, z0);
@@ -172,6 +177,7 @@ static void quadTex(float x0, float z0, float x1, float z1, float y, float uvSca
 
 static void buildWorld() {
     srand(1234);
+    { unsigned char wpx[4] = {255, 255, 255, 0}; texWhite = gfx::uploadTex(1, 1, wpx); }
     texAsph = gfx::makeGroundTexture(0);
     texWalk = gfx::makeGroundTexture(1);
     texGrass = gfx::makeGroundTexture(2);
@@ -210,7 +216,7 @@ static void buildWorld() {
     glEnd();
     glBindTexture(GL_TEXTURE_2D, texAsph);
     glBegin(GL_QUADS);
-    glColor3f(1, 1, 1);
+    glColor4f(1, 1, 1, 0.86f);  // asphalt has a slight sheen
     for (int k = 0; k <= N; k++) {
         float L = k * PITCH - HALF, e = HALF + 7.f;
         quadTex(-e, L - 7, e, L + 7, 0.02f, 8.f);
@@ -224,6 +230,7 @@ static void buildWorld() {
         for (int j = 0; j < N; j++) quadTex(blockC(i) - 24, blockC(j) - 24, blockC(i) + 24, blockC(j) + 24, 0.151f, 6.f);
     glEnd();
     glDisable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texWhite);
     // curbs (block side walls)
     glColor3f(0.62f, 0.62f, 0.62f);
     for (int i = 0; i < N; i++)
@@ -808,7 +815,7 @@ static void resetGame() {
     for (int i = 0; i < 28; i++) spawnTraffic(false);
     for (int i = 0; i < MAXPEDS; i++) spawnPed(peds[i], false);
     storyStep = 0; storyWasWanted = false;
-    toast("Welcome to LITE CITY, John.");
+    toast("Welcome to SAMPLE, John.");
     sendSms(STEPS[0].from, STEPS[0].sms);
 }
 
@@ -1034,6 +1041,7 @@ static void update(float dt) {
     if (tapped('J') && g.state != 2) { phone.open = !phone.open; phone.app = -1; phone.callWho = -1; mapOpen = false; au::play(au::SFX_CLICK, 0.7f); }
     if (tapped('M') && !phone.open) { mapOpen = !mapOpen; au::play(au::SFX_CLICK, 0.7f); }
     if (tapped('P') && g.state == 0 && !inputLocked()) g.paused = !g.paused;
+    if (tapped(VK_F2) && rt::S().progScene) { rt::S().ok = !rt::S().ok; toast(rt::S().ok ? "Graphics: HIGH" : "Graphics: BASIC (faster)"); }
     if (g.state == 2 && tapped('R')) { resetGame(); return; }
     if (g.paused) { audioFrame(); return; }
     g.clock += dt; g.uptime += dt;
@@ -1115,17 +1123,19 @@ static bool menuButton(int id, float cx, float cy, const char* label) {
 
 static void drawMenu(float W, float H) {
     rect(0, 0, W, H, 0.0f, 0.0f, 0.04f, 0.45f);
-    const std::string title = "LITE CITY";
+    const std::string title = "SAMPLE";
     float tx = W * 0.5f - textWidthBig(title) * 0.5f;
     textBig(tx + 3, H * 0.19f + 3, title, 0.0f, 0.0f, 0.1f);
     textBig(tx, H * 0.19f, title, 1.f, 1.f, 1.f);
-    std::string sub = "built on LiteEngine  -  beta v0.2";
+    std::string sub = "built on LiteEngine  -  v0.3";
     text(W * 0.5f - textWidth(sub) * 0.5f, H * 0.19f + 28, sub, 0.7f, 0.8f, 1.f);
     if (scene == 0) {
         if (menuButton(0, W * 0.5f, H * 0.42f, "SINGLE PLAYER")) { resetGame(); scene = 1; }
         if (menuButton(1, W * 0.5f, H * 0.42f + 84, "MULTIPLAYER")) { scene = 2; menuMsg.clear(); }
         if (menuButton(2, W * 0.5f, H * 0.42f + 168, "QUIT")) quit();
         text(W * 0.5f - 130, H - 26, "In game: J phone   M map   Q switch character", 0.8f, 0.8f, 0.8f);
+        std::string gq = rt::ok() ? std::string("Graphics: HIGH  (") + std::to_string(rt::S().samples) + "x antialiasing, shadows, bloom)" : "Graphics: BASIC  (see sample_gl_log.txt)";
+        text(16, H - 12, gq, rt::ok() ? 0.5f : 1.f, rt::ok() ? 1.f : 0.6f, rt::ok() ? 0.5f : 0.4f);
     } else {
         std::string lab = "Host IP (for JOIN):";
         text(W * 0.5f - 190, H * 0.33f, lab, 0.8f, 0.9f, 1.f);
@@ -1423,6 +1433,46 @@ static void drawCarObj(const Car& c, bool night, float t, bool alarm) {
 
 struct Label { float x, y; std::string s; float r, g, b; };
 
+static void drawActors(float ex, float ez, bool night, float clk, bool alarm, bool playing, std::vector<Label>* labels) {
+    glEnable(GL_LIGHTING);
+    for (int i = 0; i < MAXCARS; i++)
+        if (cars[i].used && dist2(cars[i].x, cars[i].z, ex, ez) < 380.f) drawCarObj(cars[i], night, clk, alarm);
+    for (int i = 0; i < MAXPEDS; i++)
+        if (peds[i].alive && dist2(peds[i].x, peds[i].z, ex, ez) < 200.f) {
+            const Ped& d = peds[i];
+            gfx::PersonLook L;
+            L.shirt[0] = d.r; L.shirt[1] = d.g; L.shirt[2] = d.b; L.pants[0] = d.pr; L.pants[1] = d.pg; L.pants[2] = d.pb;
+            L.hair[0] = d.hr; L.hair[1] = d.hg; L.hair[2] = d.hb; L.skin = d.skin;
+            drawPersonAt(d.x, d.z, d.heading, L, d.phase, false, 1.f);
+        }
+    if (playing || true) {
+        for (int i = 0; i < 2; i++) {  // gym friends
+            drawPersonAt(friends[i].x, friends[i].z, friends[i].heading, friends[i].look, 0, false, 0.f);
+            float sx, sy;
+            if (labels && dist2(friends[i].x, friends[i].z, ex, ez) < 90.f && project(friends[i].x, 2.4f, friends[i].z, sx, sy))
+                labels->push_back({sx, sy, friends[i].name, 1.f, 0.9f, 0.4f});
+        }
+        // the character you are NOT controlling
+        Person& other = chars[1 - cur];
+        if (other.driving < 0) {
+            drawPersonAt(other.x, other.z, other.heading, other.look, 0, false, 0.f);
+            float sx, sy;
+            if (labels && project(other.x, 2.4f, other.z, sx, sy)) labels->push_back({sx, sy, other.name, 0.5f, 0.8f, 1.f});
+        }
+    }
+    if (playing && g.driving < 0 && g.state != 1) drawPersonAt(g.x, g.z, g.heading, chars[cur].look, g.walk * 4.f, g.ammo > 0, (kd('W') || kd('S') || kd(VK_UP) || kd(VK_DOWN)) ? 1.f : 0.f);
+    else if (playing && g.state == 1) { glPushMatrix(); glTranslatef(g.x, 0.2f, g.z); glRotatef(90, 1, 0, 0); glColor3f(0.5f, 0.1f, 0.1f); box(0, 0, 0, 0.6f, 1.6f, 0.3f); glPopMatrix(); }
+    if (playing && net::N().active && net::N().remote.seen) {  // the other human player
+        const net::Remote& r = net::N().remote;
+        if (r.inCar) {
+            Car rc; rc.used = true; rc.type = r.carType; rc.x = r.x; rc.z = r.z; rc.heading = r.heading; rc.r = r.cr; rc.g = r.cg; rc.b = r.cb; rc.kind = 2;
+            drawCarObj(rc, night, clk, false);
+        } else drawPersonAt(r.x, r.z, r.heading, chars[r.ch & 1].look, r.phase, false, 1.f);
+        float sx, sy;
+        if (labels && project(r.x, r.inCar ? 3.f : 2.5f, r.z, sx, sy)) labels->push_back({sx, sy, std::string("PLAYER 2 (") + chars[r.ch & 1].name + ")", 0.3f, 1.f, 0.3f});
+    }
+}
+
 static void render() {
     Platform& pl = plat();
     float W = (float)pl.w, H = (float)pl.h;
@@ -1434,47 +1484,80 @@ static void render() {
     float dusk = clampf(1.f - fabsf(sunH) * 4.f, 0.f, 1.f);
     float sky[4] = {lerpf(0.02f, 0.55f, day) + dusk * 0.35f, lerpf(0.03f, 0.75f, day) + dusk * 0.12f, lerpf(0.08f, 0.95f, day), 1.f};
     for (int i = 0; i < 3; i++) sky[i] = clampf(sky[i], 0.f, 1.f);
-    glClearColor(sky[0], sky[1], sky[2], 1.f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_NORMALIZE);
-    glShadeModel(GL_SMOOTH);
-    begin3D(62.f, 0.3f, 900.f);
-
+    if (W < 64 || H < 64) return;  // minimised
     // ---- camera
     bool inCar = playing && g.driving >= 0;
     float spd = inCar ? fabsf(cars[g.driving].speed) : 0.f;
     float ex, ey, ez, lx, ly, lz;
     if (!playing) {
         float a = menuTime * 0.06f;
-        ex = sinf(a) * 300.f; ez = cosf(a) * 300.f; ey = 95.f; lx = 0; ly = 14.f; lz = 0;
+        ex = sinf(a) * 360.f; ez = cosf(a) * 360.f; ey = 150.f; lx = 0; ly = 10.f; lz = 0;
     } else {
         float dist = inCar ? 10.5f + spd * 0.12f : 6.5f, hgt = inCar ? 4.6f : 3.4f, ch = g.camH;
         ex = g.x - sinf(ch) * dist; ez = g.z - cosf(ch) * dist; ey = hgt;
         lx = g.x + sinf(ch) * 4.f; ly = 1.6f; lz = g.z + cosf(ch) * 4.f;
     }
-    gluLookAt(ex, ey, ez, lx, ly, lz, 0, 1, 0);
 
-    // ---- sky, lights, fog
+    // ---- lighting parameters (shared by the shader and the classic renderer)
     float sunDir[3] = {0.4f, 0.25f + 0.75f * std::max(sunH, 0.f), 0.5f};
-    glPushMatrix(); glTranslatef(ex, ey, ez); gfx::drawSky(sky, day, sunDir, clk); glPopMatrix();
-    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_COLOR_MATERIAL);
-    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
-    GLfloat lpos[4] = {sunDir[0], sunDir[1], sunDir[2], 0.f};
-    GLfloat ldif[4] = {lerpf(0.20f, 1.0f, day) + dusk * 0.1f, lerpf(0.22f, 0.95f, day), lerpf(0.40f, 0.85f, day), 1.f};
-    GLfloat lspc[4] = {day * 0.85f, day * 0.82f, day * 0.7f, 1.f};
-    GLfloat lamb[4] = {0, 0, 0, 1};
-    GLfloat gamb[4] = {lerpf(0.10f, 0.38f, day), lerpf(0.11f, 0.40f, day), lerpf(0.20f, 0.45f, day), 1.f};
-    glLightfv(GL_LIGHT0, GL_POSITION, lpos); glLightfv(GL_LIGHT0, GL_DIFFUSE, ldif);
-    glLightfv(GL_LIGHT0, GL_SPECULAR, lspc); glLightfv(GL_LIGHT0, GL_AMBIENT, lamb);
-    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, gamb);
-    glEnable(GL_FOG); glFogi(GL_FOG_MODE, GL_LINEAR); glFogfv(GL_FOG_COLOR, sky);
-    glFogf(GL_FOG_START, lerpf(90.f, 220.f, day)); glFogf(GL_FOG_END, lerpf(380.f, 700.f, day));
-
-    glCallList(cityList);
-
-    // ---- stencil shadows (buildings, vehicles, people)
     {
+        float l = sqrtf(sunDir[0] * sunDir[0] + sunDir[1] * sunDir[1] + sunDir[2] * sunDir[2]);
+        for (int k = 0; k < 3; k++) sunDir[k] /= l;
+    }
+    bool useRT = rt::ok();
+    bool night = day < 0.55f, alarm = playing && stars() > 0;
+    std::vector<Label> labels;
+    rt::Params P;
+    P.view = rt::lookAt(ex, ey, ez, lx, ly, lz);
+    for (int k = 0; k < 3; k++) P.sunDir[k] = sunDir[k];
+    {
+        float sunK = clampf(sunH * 1.8f + 0.2f, 0.f, 1.f);
+        const float dayC[3] = {2.5f, 2.3f, 2.0f}, duskC[3] = {2.6f, 1.35f, 0.65f}, moonC[3] = {0.55f, 0.68f, 1.15f};
+        for (int k = 0; k < 3; k++) P.sunCol[k] = lerpf(moonC[k] * 0.8f, lerpf(dayC[k], duskC[k], dusk), sunK);
+        P.skyCol[0] = lerpf(0.055f, 0.36f, day) + dusk * 0.10f; P.skyCol[1] = lerpf(0.075f, 0.48f, day) + dusk * 0.04f; P.skyCol[2] = lerpf(0.150f, 0.70f, day);
+        P.groundCol[0] = lerpf(0.02f, 0.16f, day); P.groundCol[1] = lerpf(0.022f, 0.15f, day); P.groundCol[2] = lerpf(0.03f, 0.13f, day);
+        for (int k = 0; k < 3; k++) { P.horizon[k] = sky[k]; P.fogCol[k] = sky[k]; }
+        P.zenith[0] = lerpf(0.01f, 0.14f, day); P.zenith[1] = lerpf(0.015f, 0.34f, day); P.zenith[2] = lerpf(0.05f, 0.78f, day);
+        P.fogDen = lerpf(0.0048f, 0.0022f, day);
+        P.night = clampf(1.f - day * 1.8f, 0.f, 1.f);
+        P.exposure = lerpf(1.3f, 0.95f, day);
+        P.bloom = lerpf(0.9f, 0.30f, day);
+        P.focus[0] = playing ? g.x : 0.f; P.focus[1] = 0.f; P.focus[2] = playing ? g.z : 0.f;
+    }
+    if (useRT) {
+        rt::shadowPass(P, [&]() { glCallList(cityList); drawActors(ex, ez, night, clk, alarm, playing, nullptr); });
+        rt::beginScene((int)W, (int)H);
+        useRT = rt::ok();
+    }
+    glClearColor(sky[0], sky[1], sky[2], 1.f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_NORMALIZE);
+    glShadeModel(GL_SMOOTH);
+    begin3D(62.f, 0.3f, 900.f);
+    glLoadMatrixf(P.view.m);
+
+    // ---- sky
+    glPushMatrix(); glTranslatef(ex, ey, ez); gfx::drawSky(sky, day, sunDir, clk); glPopMatrix();
+
+    if (useRT) {
+        rt::bindScene(P);
+        glBindTexture(GL_TEXTURE_2D, texWhite);
+        glCallList(cityList);
+    } else {  // classic fixed-function lighting + fog + stencil shadows (fallback)
+        glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_COLOR_MATERIAL);
+        glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+        GLfloat lpos[4] = {sunDir[0], sunDir[1], sunDir[2], 0.f};
+        GLfloat ldif[4] = {lerpf(0.20f, 1.0f, day) + dusk * 0.1f, lerpf(0.22f, 0.95f, day), lerpf(0.40f, 0.85f, day), 1.f};
+        GLfloat lspc[4] = {day * 0.85f, day * 0.82f, day * 0.7f, 1.f};
+        GLfloat lamb[4] = {0, 0, 0, 1};
+        GLfloat gamb[4] = {lerpf(0.10f, 0.38f, day), lerpf(0.11f, 0.40f, day), lerpf(0.20f, 0.45f, day), 1.f};
+        glLightfv(GL_LIGHT0, GL_POSITION, lpos); glLightfv(GL_LIGHT0, GL_DIFFUSE, ldif);
+        glLightfv(GL_LIGHT0, GL_SPECULAR, lspc); glLightfv(GL_LIGHT0, GL_AMBIENT, lamb);
+        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, gamb);
+        glEnable(GL_FOG); glFogi(GL_FOG_MODE, GL_LINEAR); glFogfv(GL_FOG_COLOR, sky);
+        glFogf(GL_FOG_START, lerpf(90.f, 220.f, day)); glFogf(GL_FOG_END, lerpf(380.f, 700.f, day));
+        glCallList(cityList);
         float sly = 0.4f + 0.6f * std::max(sunH, 0.f);
         gfx::shadowBegin(sunDir[0], sly, sunDir[2], 0.16f, 0.10f + 0.28f * day);
         for (const Building& b : blds) {
@@ -1496,45 +1579,8 @@ static void render() {
     }
 
     // ---- vehicles & people
-    glEnable(GL_LIGHTING);
-    bool night = day < 0.55f, alarm = playing && stars() > 0;
-    std::vector<Label> labels;
-    for (int i = 0; i < MAXCARS; i++)
-        if (cars[i].used && dist2(cars[i].x, cars[i].z, ex, ez) < 380.f) drawCarObj(cars[i], night, clk, alarm);
-    for (int i = 0; i < MAXPEDS; i++)
-        if (peds[i].alive && dist2(peds[i].x, peds[i].z, ex, ez) < 200.f) {
-            const Ped& d = peds[i];
-            gfx::PersonLook L;
-            L.shirt[0] = d.r; L.shirt[1] = d.g; L.shirt[2] = d.b; L.pants[0] = d.pr; L.pants[1] = d.pg; L.pants[2] = d.pb;
-            L.hair[0] = d.hr; L.hair[1] = d.hg; L.hair[2] = d.hb; L.skin = d.skin;
-            drawPersonAt(d.x, d.z, d.heading, L, d.phase, false, 1.f);
-        }
-    if (playing || true) {
-        for (int i = 0; i < 2; i++) {  // gym friends
-            drawPersonAt(friends[i].x, friends[i].z, friends[i].heading, friends[i].look, 0, false, 0.f);
-            float sx, sy;
-            if (dist2(friends[i].x, friends[i].z, ex, ez) < 90.f && project(friends[i].x, 2.4f, friends[i].z, sx, sy))
-                labels.push_back({sx, sy, friends[i].name, 1.f, 0.9f, 0.4f});
-        }
-        // the character you are NOT controlling
-        Person& other = chars[1 - cur];
-        if (other.driving < 0) {
-            drawPersonAt(other.x, other.z, other.heading, other.look, 0, false, 0.f);
-            float sx, sy;
-            if (project(other.x, 2.4f, other.z, sx, sy)) labels.push_back({sx, sy, other.name, 0.5f, 0.8f, 1.f});
-        }
-    }
-    if (playing && g.driving < 0 && g.state != 1) drawPersonAt(g.x, g.z, g.heading, chars[cur].look, g.walk * 4.f, g.ammo > 0, (kd('W') || kd('S') || kd(VK_UP) || kd(VK_DOWN)) ? 1.f : 0.f);
-    else if (playing && g.state == 1) { glPushMatrix(); glTranslatef(g.x, 0.2f, g.z); glRotatef(90, 1, 0, 0); glColor3f(0.5f, 0.1f, 0.1f); box(0, 0, 0, 0.6f, 1.6f, 0.3f); glPopMatrix(); }
-    if (playing && net::N().active && net::N().remote.seen) {  // the other human player
-        const net::Remote& r = net::N().remote;
-        if (r.inCar) {
-            Car rc; rc.used = true; rc.type = r.carType; rc.x = r.x; rc.z = r.z; rc.heading = r.heading; rc.r = r.cr; rc.g = r.cg; rc.b = r.cb; rc.kind = 2;
-            drawCarObj(rc, night, clk, false);
-        } else drawPersonAt(r.x, r.z, r.heading, chars[r.ch & 1].look, r.phase, false, 1.f);
-        float sx, sy;
-        if (project(r.x, r.inCar ? 3.f : 2.5f, r.z, sx, sy)) labels.push_back({sx, sy, std::string("PLAYER 2 (") + chars[r.ch & 1].name + ")", 0.3f, 1.f, 0.3f});
-    }
+    drawActors(ex, ez, night, clk, alarm, playing, &labels);
+    if (useRT) rt::unbindScene();
 
     // ---- effects (unlit)
     glDisable(GL_LIGHTING);
@@ -1580,6 +1626,20 @@ static void render() {
         }
         glDepthMask(GL_TRUE);
         float nf = clampf(1.f - day * 1.8f, 0.f, 1.f);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        glDepthMask(GL_FALSE);
+        for (size_t i = 0; i + 3 < lamps.size(); i += 4) {  // warm pools of light under each street lamp
+            if (dist2(lamps[i], lamps[i + 1], ex, ez) > 150.f) continue;
+            glPushMatrix();
+            glTranslatef(lamps[i] - lamps[i + 2] * 1.2f, 0.19f, lamps[i + 1] - lamps[i + 3] * 1.2f);
+            glBegin(GL_TRIANGLE_FAN);
+            glColor4f(1.f, 0.78f, 0.42f, 0.34f * nf); glVertex3f(0, 0, 0);
+            glColor4f(1.f, 0.7f, 0.35f, 0.f);
+            for (int k = 0; k <= 16; k++) glVertex3f(cosf(k * PI / 8.f) * 15.f, 0, sinf(k * PI / 8.f) * 15.f);
+            glEnd();
+            glPopMatrix();
+        }
+        glDepthMask(GL_TRUE);
         gfx::glowBegin(26.f);
         for (size_t i = 0; i + 3 < lamps.size(); i += 4) {
             if (dist2(lamps[i], lamps[i + 1], ex, ez) > 170.f) continue;
@@ -1621,6 +1681,9 @@ static void render() {
         glColor3f(1.f, 0.9f, 0.4f);
         glBegin(GL_LINES); glVertex3f(g.tx0, 1.3f, g.tz0); glVertex3f(g.tx1, 1.3f, g.tz1); glEnd();
     }
+
+    // ---- finish the 3D picture: resolve MSAA, bloom, colour grade -> window
+    if (useRT) rt::endScene((int)W, (int)H, P.bloom);
 
     // ------------------------------------------------------------ 2D ----
     begin2D();
@@ -1705,7 +1768,7 @@ static void render() {
         text(20, H - 110, "W/S gas+brake (walk)   A/D steer (turn)   SHIFT sprint   H horn", 1, 1, 1);
         text(20, H - 90, "SPACE shoot (on foot) / handbrake (car)   F enter/exit car", 1, 1, 1);
         text(20, H - 70, "E shop/job/talk   J phone   M map   Q switch character", 1, 1, 1);
-        text(20, H - 50, "P pause   ESC main menu", 1, 1, 1);
+        text(20, H - 50, "P pause   F2 graphics quality   ESC main menu", 1, 1, 1);
         text(20, H - 28, "Cops, bills and hunger are all trying to ruin your day.", 0.8f, 0.8f, 0.8f);
     }
     if (g.hurt > 0) rect(0, 0, W, H, 0.8f, 0.f, 0.f, clampf(g.hurt, 0.f, 0.3f));
@@ -1731,13 +1794,26 @@ static void render() {
 }
 
 // ----------------------------------------------------------------- main ----
+#ifdef _WIN32
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
-    if (!init("LITE CITY (beta) - LiteEngine", 1280, 720)) {
+    if (!init("Sample", 1280, 720)) {
         MessageBoxA(nullptr, "Could not create an OpenGL window.", "LiteEngine", MB_OK | MB_ICONERROR);
         return 1;
     }
     au::start();
     au::M().station = 1;
+    // modern graphics path (shaders, shadows, antialiasing, bloom). Falls back to the classic renderer if unsupported.
+    {
+        bool all = loadModernGL([](const char* n) -> void* { return (void*)wglGetProcAddress(n); });
+        bool good = all && rt::init();
+        if (!good) {
+            if (!all) rt::S().log += "Some OpenGL functions are missing (the driver is older than OpenGL 3.0).\n";
+            rt::S().ok = false;
+            rt::writeLog("sample_gl_log.txt");
+        }
+        gfx::hooks().unlitBegin = &rt::unlitBegin;
+        gfx::hooks().unlitEnd = &rt::unlitEnd;
+    }
     loadOBJ("assets/car.obj", gfx::carModel(), 4.4f);  // optional: drop your own model here
     buildWorld();
     resetGame();
@@ -1752,3 +1828,4 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     net::stop();
     return 0;
 }
+#endif  // _WIN32

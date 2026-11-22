@@ -6,16 +6,14 @@
 //  The game (main.cpp) is built ON TOP of this header.
 // ============================================================================
 #pragma once
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <GL/gl.h>
-#include <GL/glu.h>
+#include "glapi.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
+#include <algorithm>
 
 namespace lite {
 
@@ -33,9 +31,12 @@ inline float wrapAngle(float a) {
 
 // -------------------------------------------------------------- platform ---
 struct Platform {
+#ifdef _WIN32
     HWND hwnd = nullptr;
     HDC hdc = nullptr;
     HGLRC rc = nullptr;
+    LARGE_INTEGER freq, last;
+#endif
     int w = 1280, h = 720;
     bool running = true;
     bool down[256] = {};
@@ -44,7 +45,6 @@ struct Platform {
     int mx = 0, my = 0;
     bool mouseDown = false, mousePressed = false;
     std::string typed;  // characters typed this frame
-    LARGE_INTEGER freq, last;
 };
 inline Platform& plat() { static Platform p; return p; }
 
@@ -55,6 +55,7 @@ inline float mouseY() { return (float)plat().my; }
 inline bool mouseClicked() { return plat().mousePressed; }
 inline bool mouseHeld() { return plat().mouseDown; }
 
+#ifdef _WIN32
 inline LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     Platform& p = plat();
     switch (m) {
@@ -152,7 +153,64 @@ inline bool pump(float& dt) {
     return p.running;
 }
 inline void present() { SwapBuffers(plat().hdc); }
+#endif
 inline void quit() { plat().running = false; }
+
+// ------------------------------------------------- small GLU replacements ---
+inline void gluPerspective(double fovy, double aspect, double zn, double zf) {
+    double t = zn * tan(fovy * 3.14159265358979 / 360.0);
+    glFrustum(-t * aspect, t * aspect, -t, t, zn, zf);
+}
+inline void lookAtMatrix(float* m, float ex, float ey, float ez, float cx, float cy, float cz, float ux, float uy, float uz) {
+    float fx = cx - ex, fy = cy - ey, fz = cz - ez;
+    float fl = sqrtf(fx * fx + fy * fy + fz * fz);
+    fx /= fl; fy /= fl; fz /= fl;
+    float sx = fy * uz - fz * uy, sy = fz * ux - fx * uz, sz = fx * uy - fy * ux;
+    float sl = sqrtf(sx * sx + sy * sy + sz * sz);
+    sx /= sl; sy /= sl; sz /= sl;
+    float vx = sy * fz - sz * fy, vy = sz * fx - sx * fz, vz = sx * fy - sy * fx;
+    m[0] = sx; m[4] = sy; m[8] = sz;   m[12] = -(sx * ex + sy * ey + sz * ez);
+    m[1] = vx; m[5] = vy; m[9] = vz;   m[13] = -(vx * ex + vy * ey + vz * ez);
+    m[2] = -fx; m[6] = -fy; m[10] = -fz; m[14] = (fx * ex + fy * ey + fz * ez);
+    m[3] = 0; m[7] = 0; m[11] = 0; m[15] = 1;
+}
+inline void gluLookAt(double ex, double ey, double ez, double cx, double cy, double cz, double ux, double uy, double uz) {
+    float m[16];
+    lookAtMatrix(m, (float)ex, (float)ey, (float)ez, (float)cx, (float)cy, (float)cz, (float)ux, (float)uy, (float)uz);
+    glMultMatrixf(m);
+}
+inline int gluProject(double x, double y, double z, const double* mv, const double* pr, const int* vp, double* wx, double* wy, double* wz) {
+    double a[4] = {x, y, z, 1}, b[4], c[4];
+    for (int r = 0; r < 4; r++) b[r] = mv[r] * a[0] + mv[4 + r] * a[1] + mv[8 + r] * a[2] + mv[12 + r] * a[3];
+    for (int r = 0; r < 4; r++) c[r] = pr[r] * b[0] + pr[4 + r] * b[1] + pr[8 + r] * b[2] + pr[12 + r] * b[3];
+    if (c[3] == 0.0) return 0;
+    for (int r = 0; r < 3; r++) c[r] /= c[3];
+    *wx = vp[0] + (1 + c[0]) * vp[2] * 0.5;
+    *wy = vp[1] + (1 + c[1]) * vp[3] * 0.5;
+    *wz = (1 + c[2]) * 0.5;
+    return 1;
+}
+// builds all mip levels (RGBA / unsigned byte only) with a box filter
+inline int gluBuild2DMipmaps(GLenum target, GLint internalFmt, GLsizei w, GLsizei h, GLenum fmt, GLenum type, const void* data) {
+    std::vector<unsigned char> cur((const unsigned char*)data, (const unsigned char*)data + (size_t)w * h * 4), next;
+    int level = 0;
+    for (;;) {
+        glTexImage2D(target, level, internalFmt, w, h, 0, fmt, type, cur.data());
+        if (w == 1 && h == 1) break;
+        int nw = w > 1 ? w / 2 : 1, nh = h > 1 ? h / 2 : 1;
+        next.assign((size_t)nw * nh * 4, 0);
+        for (int y = 0; y < nh; y++)
+            for (int x = 0; x < nw; x++)
+                for (int c = 0; c < 4; c++) {
+                    int x0 = std::min(x * 2, w - 1), x1 = std::min(x * 2 + 1, w - 1), y0 = std::min(y * 2, h - 1), y1 = std::min(y * 2 + 1, h - 1);
+                    int sum = cur[((size_t)y0 * w + x0) * 4 + c] + cur[((size_t)y0 * w + x1) * 4 + c] + cur[((size_t)y1 * w + x0) * 4 + c] + cur[((size_t)y1 * w + x1) * 4 + c];
+                    next[((size_t)y * nw + x) * 4 + c] = (unsigned char)(sum / 4);
+                }
+        cur.swap(next);
+        w = nw; h = nh; level++;
+    }
+    return 0;
+}
 
 // -------------------------------------------------------------- renderer ---
 inline void begin3D(float fov, float zn, float zf) {

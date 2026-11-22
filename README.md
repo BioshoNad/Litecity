@@ -1,20 +1,27 @@
-# LITE CITY v0.2 (beta) on LiteEngine
+# SAMPLE v0.3 on LiteEngine
 
-A from-scratch 3D game engine (Win32 + OpenGL, **zero dependencies**) and an open-world
-sample game with a story. Builds to a single `LiteCity.exe`.
+An open-world sample game with a story, running on your own from-scratch engine
+(Win32 + OpenGL, **zero dependencies**). Builds to a single `LiteCity.exe` (rename it if you like).
 
 ## Build
 1. Install a compiler once (**MSYS2/MinGW-w64** or **Visual Studio Build Tools**) and double-click `build.bat`
-   - or upload everything to GitHub and let the included GitHub Action build it (Actions tab -> Artifacts).
-2. Run `LiteCity.exe`.
+   - or upload everything to GitHub; the included GitHub Action builds it (Actions tab -> Artifacts).
+2. Run the exe.
 
 Manual MinGW command:
-`g++ -std=c++17 -O2 main.cpp -o LiteCity.exe -mwindows -static -lopengl32 -lglu32 -lgdi32 -luser32 -lwinmm -lws2_32`
+`g++ -std=c++17 -O2 main.cpp -o LiteCity.exe -mwindows -static -lopengl32 -lgdi32 -luser32 -lwinmm -lws2_32`
 
-## Main menu
-**SINGLE PLAYER** / **MULTIPLAYER** / **QUIT** - the blue shape behind a button grows when the mouse hovers over it.
-Multiplayer: one player picks HOST GAME, the other types the host's IP and picks JOIN GAME (UDP port 27015;
-open it in the firewall / forward it for internet play). You each play your own copy of the city and see each other.
+## What is new in v0.3: the graphics engine
+- **Shader renderer**: per-pixel lighting, sun + sky ambient light, contact darkening near the ground
+- **Real shadow maps** from the sun (buildings, cars, people, trees), soft edges
+- **Sky reflections** on car paint, glass towers and windows, with sun glints and Fresnel
+- **ACES tone mapping**, gamma-correct colour, distance haze that blends into the sky
+- **4x antialiasing, bloom, vignette and colour grading**
+- Night: lit windows, street-lamp light pools, headlights, taillights and police lights that glow
+- Sharper 256px facade textures (glass offices, brick apartments, modern towers), anisotropic filtering
+- **Automatic fallback**: if the graphics card/driver cannot run shaders, the game uses the classic renderer
+  and writes the reason to `sample_gl_log.txt`. **F2** switches HIGH / BASIC quality while playing
+  (use BASIC if the game runs slowly).
 
 ## Controls
 | Key | On foot | In car |
@@ -23,41 +30,28 @@ open it in the firewall / forward it for internet play). You each play your own 
 | A / D | turn | steer |
 | SHIFT | sprint | - |
 | SPACE | shoot | handbrake |
-| F | enter nearest car | exit car (below ~30 km/h) |
+| F | enter nearest car | exit car |
 | E | shop / job / bills / talk | same |
 | H | - | horn |
-| **Q** | **switch John <-> Jason** | |
-| **J** | **phone** (LP Media, Messages, Calls, G Files) | |
-| **M** | **full city map** (click = waypoint, X = clear) | |
+| Q | switch John <-> Jason | |
+| J | phone (LP Media, Messages, Calls, G Files) | |
+| M | full city map (click = waypoint, X = clear) | |
+| F2 | graphics quality HIGH / BASIC | |
 | P / ESC | pause / back to menu | |
 
-## Story (Chapter 1)
-You are **John**. Your friends **Marcus** and **Dante** hang out at the **GYM**, which is right behind the Ammo Store.
-Follow the yellow OBJECTIVE marker: meet them, steal a car and pick up **Jason** (then press Q to play as him),
-cause trouble, lose the cops, visit Marcus in hospital, and get to the docks. After the chapter you keep free-roaming.
+## Story, phone, sound, multiplayer
+Same as v0.2: John, Marcus and Dante at the gym (behind the Ammo Store), Jason joins you, six story steps;
+phone apps; synthesized sound and three radio stations; host/join two-player presence on UDP port 27015.
 
-## Phone (J)
-- **LP Media** - pick a radio station (LITE FM, NIGHT DRIVE, CHILL ROADS) and set the volume
-- **Messages** - texts from your friends (they arrive as the story moves on)
-- **Calls** - call Marcus/Jason/Dante for hints
-- **G Files** - mission log, stats, SAVE / LOAD (litecity.sav), controls help
-
-## Sound
-All synthesized in code: gunshots, explosions, horn, phone rings, engine hum, police siren, and 3 music stations.
-
-## Graphics in v0.2
-Sky dome with sun, moon and stars; stencil shadows; textured roads, sidewalks, grass; 3 building styles with
-setback towers; trees; street lamps with night glow; crosswalks; 3 shaped car bodies with glass, rims and lights;
-detailed characters. **Real car models:** drop an OBJ at `assets/car.obj` (see assets/README.txt).
+## Real car models
+Drop a Wavefront OBJ at `assets/car.obj` (see assets/README.txt). It replaces the sedan body.
 
 ## Engine layout
-- `engine.h` window, GL context, input (keyboard+mouse+text), timer, 2D/3D helpers
-- `audio.h`  software mixer + synthesized sounds + music (waveOut output)
-- `net.h`    UDP host/join presence for multiplayer
-- `model.h`  OBJ model loader
-- `gfx.h`    sky, shadows, textures, cars, people, trees, lamps, glow
-- `main.cpp` the game: world, AI, police, economy, story, phone, map, menus, HUD
+`engine.h` window/input/timer/2D helpers | `glapi.h` OpenGL layer + modern-GL loader | `renderer.h` shaders, shadow map,
+MSAA, bloom | `gfx.h` sky, textures, cars, people, trees, lamps | `audio.h` sound | `net.h` multiplayer | `model.h` OBJ loader |
+`main.cpp` the game.
 
-## Roadmap
-Shader-based lighting and reflections, more story chapters and characters, interiors, mouse-look camera,
-real shared-world multiplayer (synchronised NPCs/police), more vehicle types.
+## Honest limits
+This is a real modern lighting pipeline, but the models are still simple shapes and textures are generated in code, so it
+looks like a stylised early-2010s game, not Unity 6 / Unreal 5. The biggest remaining jump needs real art assets
+(OBJ models, photo textures), which the engine can already load.

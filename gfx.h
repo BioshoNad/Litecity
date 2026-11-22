@@ -14,6 +14,9 @@ namespace lite {
 namespace gfx {
 
 inline Model& carModel() { static Model m; return m; }
+// the shader renderer installs these so emissive parts (lights) can be drawn without lighting
+struct Hooks { void (*unlitBegin)() = nullptr; void (*unlitEnd)() = nullptr; };
+inline Hooks& hooks() { static Hooks h; return h; }
 
 // ------------------------------------------------------------ primitives --
 inline void sphere(float r, int slices, int stacks) {
@@ -68,6 +71,7 @@ inline GLuint uploadTex(int w, int h, const unsigned char* px) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, 0x84FE, 8.0f);  // anisotropic filtering (ignored if unsupported)
     gluBuild2DMipmaps(GL_TEXTURE_2D, 4, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
     return t;
 }
@@ -85,62 +89,70 @@ inline GLuint makeGroundTexture(int kind) {
                 float v = 40 + frand() * 12 + (frand() < 0.02f ? 28 : 0);
                 r = v; g = v; b = v + 2;
             } else if (kind == 1) {
-                float v = 150 + frand() * 14;
-                if (x % 16 == 0 || y % 16 == 0) v -= 38;
+                float v = 122 + frand() * 14;
+                if (x % 16 == 0 || y % 16 == 0) v -= 30;
                 r = v; g = v; b = v - 4;
             } else {
                 float v = frand();
                 r = 52 + v * 26; g = 100 + v * 34; b = 40 + v * 16;
             }
-            o[0] = clampb(r); o[1] = clampb(g); o[2] = clampb(b); o[3] = 255;
+            o[0] = clampb(r); o[1] = clampb(g); o[2] = clampb(b); o[3] = 0;
         }
     return uploadTex(S, S, px);
 }
 
-// style: 0 glass office, 1 apartment (brick), 2 modern bands
+// style: 0 glass office, 1 apartment (brick), 2 modern bands.  256x256, alpha = emissive mask (lit windows)
 inline GLuint makeBuildingTexture(int style) {
-    const int S = 64;
+    const int S = 256;
     static unsigned char px[S * S * 4];
+    auto hash = [](int a, int b) { unsigned h = (unsigned)(a * 73856093) ^ (unsigned)(b * 19349663); h ^= h >> 13; h *= 1274126177u; return (h ^ (h >> 16)) & 0xFFFF; };
     for (int y = 0; y < S; y++)
         for (int x = 0; x < S; x++) {
             unsigned char* o = &px[(y * S + x) * 4];
-            float r = 200, g = 200, b = 205;
-            if (style == 0) {  // 8x8 grid of glass panes
-                int cx = x / 8, cy = y / 8, lx = x % 8, ly = y % 8;
-                bool win = lx >= 1 && lx <= 6 && ly >= 1 && ly <= 6;
+            float r = 205, g = 205, b = 208, em = 0;
+            float n = (hash(x, y) % 100) / 100.f;  // fine grain
+            if (style == 0) {  // glass office: 8x8 panes of 32px with frames, gradient glass
+                int cx = x / 32, cy = y / 32, lx = x % 32, ly = y % 32;
+                bool win = lx >= 3 && lx < 29 && ly >= 3 && ly < 29;
                 if (win) {
-                    unsigned h = (unsigned)(cx * 73856093u ^ cy * 19349663u);
-                    bool lit = (h % 100) < 22;
-                    if (lit) { r = 255; g = 220; b = 130; }
-                    else { float s = 0.7f + (h % 40) / 100.f; r = 60 * s; g = 110 * s; b = 160 * s; }
-                    if (ly == 1) { r += 25; g += 25; b += 25; }  // glass glint
-                } else { r = 150; g = 152; b = 158; }
-            } else if (style == 1) {  // brick + small windows (4 across, 4 floors)
-                int cx = x / 16, cy = y / 16, lx = x % 16, ly = y % 16;
-                bool win = lx >= 4 && lx <= 11 && ly >= 4 && ly <= 12;
-                int row = y / 4;
-                bool mortar = (y % 4 == 0) || (x + (row % 2) * 4) % 8 == 0;
-                float n = frand() * 18;
-                r = mortar ? 150 : 175 + n; g = mortar ? 140 : 100 + n * 0.5f; b = mortar ? 130 : 85;
-                if (win) {
-                    unsigned h = (unsigned)(cx * 83492791u ^ cy * 297657u);
-                    bool lit = (h % 100) < 38;
-                    if (lit) { r = 255; g = 205; b = 110; } else { r = 38; g = 48; b = 66; }
-                    if (lx == 4 || lx == 11 || ly == 4 || ly == 12) { r = 215; g = 215; b = 215; }  // frame
-                }
-            } else {  // modern: horizontal glass bands over concrete floors
-                int cy = y / 16, ly = y % 16, cx = x / 16, lx = x % 16;
-                if (ly < 4) { r = 205; g = 205; b = 200; }
+                    unsigned h = hash(cx, cy);
+                    bool lit = (h % 100) < 24;
+                    float grad = 1.f - ly / 40.f;
+                    if (lit) { r = 255; g = 214 + 20 * grad; b = 130 + 30 * grad; em = 255; }
+                    else { float s = 0.75f + (h % 40) / 100.f; r = (46 + 40 * grad) * s; g = (92 + 50 * grad) * s; b = (140 + 55 * grad) * s; }
+                    if (lx == 15 || lx == 16) { r *= 0.75f; g *= 0.75f; b *= 0.75f; if (lit) em = 140; }  // centre mullion
+                } else { r = 128 + 14 * n; g = 130 + 14 * n; b = 138 + 14 * n; }
+            } else if (style == 1) {  // brick apartments: 4x4 windows of 64px, brick courses 8px
+                int cx = x / 64, cy = y / 64, lx = x % 64, ly = y % 64;
+                int row = y / 8;
+                bool mortar = (y % 8 == 0) || ((x + (row % 2) * 8) % 16 == 0);
+                unsigned bh = hash(x / 16 + (row % 2), row);
+                float tone = 0.88f + (bh % 30) / 100.f;
+                r = mortar ? 168 : 176 * tone; g = mortar ? 160 : 98 * tone; b = mortar ? 150 : 78 * tone;
+                bool win = lx >= 14 && lx < 50 && ly >= 12 && ly < 52;
+                bool frame = lx >= 11 && lx < 53 && ly >= 9 && ly < 55;
+                bool sill = lx >= 9 && lx < 55 && ly >= 55 && ly < 59;
+                if (sill) { r = 205; g = 200; b = 190; }
+                else if (win) {
+                    unsigned h = hash(cx + 7, cy + 3);
+                    bool lit = (h % 100) < 36;
+                    float grad = 1.f - (ly - 12) / 60.f;
+                    if (lit) { r = 255; g = 196 + 30 * grad; b = 110 + 26 * grad; em = 255; } else { r = 34 + 14 * grad; g = 44 + 16 * grad; b = 64 + 20 * grad; }
+                    if (lx == 31 || lx == 32 || ly == 31 || ly == 32) { r = 215; g = 215; b = 210; em = 0; }  // window cross
+                } else if (frame) { r = 222; g = 220; b = 214; }
+            } else {  // modern: concrete bands and wide glass bands
+                int cy = y / 64, ly = y % 64, cx = x / 64, lx = x % 64;
+                if (ly < 14) { r = 200 + 10 * n; g = 200 + 10 * n; b = 196 + 10 * n; if (ly < 2) { r = 150; g = 150; b = 150; } }
                 else {
-                    unsigned h = (unsigned)(cx * 2654435761u ^ cy * 40503u);
-                    bool lit = (h % 100) < 28;
-                    if (lit) { r = 250; g = 225; b = 150; }
-                    else { r = 35; g = 70; b = 105; }
-                    if (lx == 0) { r = 170; g = 170; b = 175; }  // mullion
-                    if (ly == 4) { r += 30; g += 30; b += 30; }
+                    unsigned h = hash(cx + 11, cy + 5);
+                    bool lit = (h % 100) < 30;
+                    float grad = 1.f - (ly - 14) / 60.f;
+                    if (lit) { r = 252; g = 222 + 16 * grad; b = 150 + 20 * grad; em = 255; }
+                    else { r = 26 + 22 * grad; g = 62 + 34 * grad; b = 100 + 46 * grad; }
+                    if (lx < 2 || lx > 61) { r = 168; g = 168; b = 174; em = 0; }  // mullions
                 }
             }
-            o[0] = clampb(r); o[1] = clampb(g); o[2] = clampb(b); o[3] = 255;
+            o[0] = clampb(r); o[1] = clampb(g); o[2] = clampb(b); o[3] = clampb(em);
         }
     return uploadTex(S, S, px);
 }
@@ -170,7 +182,7 @@ inline void drawCar(const CarLook& c) {
     GLfloat spec[4] = {0.55f, 0.55f, 0.6f, 1.f}, nospec[4] = {0, 0, 0, 1};
     const float BOT = 0.32f;
     if (carModel().ok && !c.dead && c.type == 0) {  // optional real model
-        glColor3f(br, bg, bb);
+        glColor4f(br, bg, bb, 0.5f);
         glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, spec);
         glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 40.f);
         carModel().draw();
@@ -182,13 +194,13 @@ inline void drawCar(const CarLook& c) {
             bool glass = (i == 2 || i == 4) && !c.dead;
             float dz = p[i + 1].z - p[i].z, dy = p[i + 1].y - p[i].y, l = sqrtf(dz * dz + dy * dy);
             float ny = dz / l, nz = -dy / l;
-            if (glass) glColor3f(0.08f, 0.12f, 0.18f); else glColor3f(br, bg, bb);
+            if (glass) glColor4f(0.03f, 0.05f, 0.08f, 0.f); else glColor4f(br, bg, bb, 0.5f);
             glBegin(GL_QUADS);
             glNormal3f(0, ny, nz);
             glVertex3f(-p[i].hw, p[i].y, p[i].z); glVertex3f(p[i].hw, p[i].y, p[i].z);
             glVertex3f(p[i + 1].hw, p[i + 1].y, p[i + 1].z); glVertex3f(-p[i + 1].hw, p[i + 1].y, p[i + 1].z);
             glEnd();
-            if (glass) glColor3f(br, bg, bb);
+            if (glass) glColor4f(br, bg, bb, 0.5f);
             for (int s = -1; s <= 1; s += 2) {
                 glBegin(GL_QUADS);
                 glNormal3f((float)s, 0.15f, 0);
@@ -203,14 +215,14 @@ inline void drawCar(const CarLook& c) {
             float zb0 = p[2].z + 0.12f, zb1 = p[5].z - 0.08f, zt0 = p[3].z + 0.12f, zt1 = p[4].z - 0.12f;
             auto xAt = [&](float y) { return lerpf(p[5].hw, p[3].hw, clampf((y - belt) / (top + 0.05f - belt), 0.f, 1.f)) + 0.012f; };
             for (int s = -1; s <= 1; s += 2) {
-                glColor3f(0.08f, 0.12f, 0.18f);
+                glColor4f(0.03f, 0.05f, 0.08f, 0.f);
                 glBegin(GL_QUADS);
                 glNormal3f((float)s, 0.3f, 0);
                 glVertex3f(s * xAt(belt), belt, zb0); glVertex3f(s * xAt(belt), belt, zb1);
                 glVertex3f(s * xAt(top), top, zt1); glVertex3f(s * xAt(top), top, zt0);
                 glEnd();
                 float zm = (zb0 + zb1) * 0.5f, zmt = (zt0 + zt1) * 0.5f;
-                glColor3f(br, bg, bb);
+                glColor4f(br, bg, bb, 0.5f);
                 glBegin(GL_QUADS);
                 glVertex3f(s * (xAt(belt) + 0.004f), belt, zm - 0.05f); glVertex3f(s * (xAt(belt) + 0.004f), belt, zm + 0.05f);
                 glVertex3f(s * (xAt(top) + 0.004f), top, zmt + 0.05f); glVertex3f(s * (xAt(top) + 0.004f), top, zmt - 0.05f);
@@ -219,7 +231,7 @@ inline void drawCar(const CarLook& c) {
         }
         glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, nospec);
         // bumpers, grille, plates
-        glColor3f(0.12f, 0.12f, 0.13f);
+        glColor4f(0.12f, 0.12f, 0.13f, 0.55f);
         box(0, 0.45f, p[7].z + 0.03f, 1.9f, 0.2f, 0.12f);
         box(0, 0.45f, p[0].z - 0.03f, 1.9f, 0.2f, 0.12f);
         if (!c.dead) {
@@ -228,11 +240,11 @@ inline void drawCar(const CarLook& c) {
             glColor3f(0.92f, 0.92f, 0.85f);
             box(0, 0.44f, p[7].z + 0.1f, 0.5f, 0.12f, 0.02f);
             box(0, 0.5f, p[0].z - 0.1f, 0.5f, 0.12f, 0.02f);
-            glColor3f(br, bg, bb);  // mirrors
+            glColor4f(br, bg, bb, 0.5f);  // mirrors
             for (int s = -1; s <= 1; s += 2) box(s * (p[5].hw + 0.1f), p[5].y + 0.12f, p[5].z - 0.35f, 0.14f, 0.1f, 0.2f);
         }
         if (c.police && !c.dead) {
-            glColor3f(0.94f, 0.94f, 0.94f);
+            glColor4f(0.94f, 0.94f, 0.94f, 0.25f);
             for (int s = -1; s <= 1; s += 2) {
                 glBegin(GL_QUADS);
                 glNormal3f((float)s, 0, 0);
@@ -250,13 +262,14 @@ inline void drawCar(const CarLook& c) {
             glTranslatef(sx * (p[2].hw - 0.04f), wr, sz * wz);
             glColor3f(0.04f, 0.04f, 0.04f);
             cylX(wr, 0.3f, 14);
-            glColor3f(c.dead ? 0.2f : 0.72f, c.dead ? 0.2f : 0.72f, c.dead ? 0.2f : 0.76f);
+            glColor4f(c.dead ? 0.2f : 0.72f, c.dead ? 0.2f : 0.72f, c.dead ? 0.2f : 0.76f, 0.35f);
             glTranslatef(sx * 0.02f, 0, 0);
             cylX(wr * 0.58f, 0.31f, 10);
             glPopMatrix();
         }
     if (c.dead) return;
     // emissive lights (unlit)
+    if (hooks().unlitBegin) hooks().unlitBegin();
     glDisable(GL_LIGHTING);
     float fz = p[6].z + 0.01f, rz = p[1].z - 0.01f;
     glColor3f(c.lights ? 1.f : 0.8f, c.lights ? 0.97f : 0.8f, c.lights ? 0.72f : 0.65f);
@@ -270,6 +283,7 @@ inline void drawCar(const CarLook& c) {
         glColor3f(0.08f, 0.2f, a ? 0.25f : 1.f); box(0.4f, ry, -0.35f, 0.62f, 0.16f, 0.36f);
     }
     glEnable(GL_LIGHTING);
+    if (hooks().unlitEnd) hooks().unlitEnd();
 }
 
 // ----------------------------------------------------------------- people --
