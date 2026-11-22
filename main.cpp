@@ -274,9 +274,9 @@ static void buildWorld() {
                 for (float t = -16.f; t <= 16.f; t += 8.f) {
                     float tx = (side == 0) ? cx + t : (side == 1) ? cx + t : (side == 2) ? cx - 22.7f : cx + 22.7f;
                     float tz = (side == 0) ? cz - 22.7f : (side == 1) ? cz + 22.7f : cz + t;
-                    bool near = false;
-                    for (const Spot& s : spots) if (dist2(s.x, s.z, tx, tz) < 6.5f) near = true;
-                    if (near || frand() < 0.4f) continue;
+                    bool tooClose = false;
+                    for (const Spot& s : spots) if (dist2(s.x, s.z, tx, tz) < 6.5f) tooClose = true;
+                    if (tooClose || frand() < 0.4f) continue;
                     gfx::drawTree(tx, tz, frange(0.8f, 1.15f), frange(0.8f, 1.2f));
                 }
             const float sx[2] = {-1, 1}, sz[2] = {1, -1};
